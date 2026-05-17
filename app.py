@@ -958,7 +958,7 @@ with tab_db:
                 cols_show = ["id", "q_number", "year", "area", "section_type",
                              "subarea", "answer", "inserted_at"]
                 rows_disp = [{c: row.get(c) for c in cols_show} for row in sample]
-                st.dataframe(rows_disp, use_container_width=True, hide_index=True)
+                st.dataframe(rows_disp, width='stretch', hide_index=True)
             else:
                 st.info("Nenhuma questão no banco ainda.")
         else:

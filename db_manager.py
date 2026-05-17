@@ -196,47 +196,45 @@ class SupabaseBackend:
     def upsert_questions(self, questions: List[Dict[str, Any]]) -> Dict[str, int]:
         rows = [_prepare_row(q, json_as_str=False) for q in questions]
 
-        # Tentativa em lote primeiro
+        # on_conflict obrigatório para PostgREST resolver constraints compostas
+        upsert_params = {"on_conflict": "exam,year,area,q_number"}
+        upsert_headers = {
+            **self._hdrs,
+            "Prefer": "resolution=merge-duplicates,return=minimal",
+        }
+
+        # Tentativa em lote
         try:
             r = self._http.post(
                 self._url(),
-                headers={
-                    **self._hdrs,
-                    "Prefer": "resolution=merge-duplicates,return=minimal",
-                },
+                headers=upsert_headers,
+                params=upsert_params,
                 content=json.dumps(rows, ensure_ascii=False, default=str),
                 timeout=60,
             )
             if r.is_success:
+                log.info("Supabase batch upsert: %d questão(ões) OK.", len(rows))
                 return {"inserted": len(rows), "errors": 0}
-            # Supabase retornou erro HTTP — loga o body para diagnóstico
-            log.error(
-                "Supabase batch upsert HTTP %d: %s",
-                r.status_code, r.text[:500],
-            )
+            log.error("Supabase batch upsert HTTP %d: %s", r.status_code, r.text[:500])
         except Exception as e:
             log.error("Supabase batch upsert exception: %s", e)
 
-        # Fallback: um a um para identificar qual questão falha
+        # Fallback individual — identifica qual questão falha
         ok = err = 0
         for row in rows:
             try:
                 r = self._http.post(
                     self._url(),
-                    headers={
-                        **self._hdrs,
-                        "Prefer": "resolution=merge-duplicates,return=minimal",
-                    },
+                    headers=upsert_headers,
+                    params=upsert_params,
                     content=json.dumps([row], ensure_ascii=False, default=str),
                     timeout=30,
                 )
                 if r.is_success:
                     ok += 1
                 else:
-                    log.error(
-                        "Supabase Q%s HTTP %d: %s",
-                        row.get("q_number"), r.status_code, r.text[:300],
-                    )
+                    log.error("Supabase Q%s HTTP %d: %s",
+                              row.get("q_number"), r.status_code, r.text[:300])
                     err += 1
             except Exception as e2:
                 log.error("Supabase Q%s exception: %s", row.get("q_number"), e2)
