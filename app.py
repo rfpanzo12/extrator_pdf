@@ -717,7 +717,9 @@ with tab_ext:
             grouped = group_questions_for_output(questions, effective_subareas)
 
             n_fg = len(grouped["formacao_geral"])
+            # CE: conta todas as questões em todos os buckets (incluindo "Não classificada")
             n_ce = sum(len(v) for v in grouped["componente_especifico"].values())
+            # nao_classificadas: apenas questões sem section_type reconhecido
             n_nc = len(grouped["nao_classificadas"])
 
             st.session_state.questions = questions
@@ -739,6 +741,11 @@ with tab_ext:
                     "Banco → %d inseridas | %d erros",
                     db_res.get("inserted", 0), db_res.get("errors", 0),
                 )
+            elif st.session_state.db_ok is None:
+                logging.warning(
+                    "Banco não testado — clique em 'Testar conexão' na barra lateral "
+                    "e execute novamente, ou verifique se o DDL foi criado no Supabase."
+                )
 
             st.session_state.db_upsert = db_res
             st.session_state.run_done  = True
@@ -754,12 +761,18 @@ with tab_ext:
             # Banner de sucesso
             ins_n = db_res.get("inserted", 0)
             err_n = db_res.get("errors", 0)
-            st.success(
+            success_msg = (
                 f"✅ **{n} questões** extraídas — "
-                f"Formação Geral: **{n_fg}** | Comp. Específico: **{n_ce}** | Não classif.: **{n_nc}**\n\n"
+                f"Formação Geral: **{n_fg}** | Comp. Específico: **{n_ce}** | Sem seção: **{n_nc}**\n\n"
                 f"🗄️ Banco: **{ins_n}** questão(ões) salvas"
-                + (f" · ⚠️ {err_n} erro(s)" if err_n else "")
+                + (f" · ⚠️ {err_n} erro(s) — veja o **Log** para detalhes" if err_n else "")
             )
+            if err_n and ins_n == 0:
+                success_msg += (
+                    "\n\n💡 **Dica:** Se todos falharam, verifique se o DDL foi executado "
+                    "no Supabase (aba 🗄️ Banco de Dados → Ver DDL completo)."
+                )
+            st.success(success_msg)
 
         except Exception as exc:
             bar.empty()

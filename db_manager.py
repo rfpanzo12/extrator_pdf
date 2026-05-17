@@ -99,6 +99,8 @@ def _prepare_row(q: Dict[str, Any], json_as_str: bool = False) -> Dict[str, Any]
     json_as_str=False → Supabase/Postgres (campos JSON ficam como dict/list)
     """
     row = {k: v for k, v in q.items() if k != "id"}
+
+    # Campos JSON
     json_fields = ("sections", "alternatives", "tables", "figures")
     for f in json_fields:
         val = row.get(f)
@@ -111,7 +113,18 @@ def _prepare_row(q: Dict[str, Any], json_as_str: bool = False) -> Dict[str, Any]
                 row[f] = json.loads(val)
             except Exception:
                 row[f] = val
-    row.setdefault("inserted_at", datetime.now(timezone.utc).isoformat())
+
+    # Campos BOOLEAN — None causaria erro no Postgres (NOT NULL DEFAULT FALSE)
+    for f in ("llm_clean_failed", "llm_classify_failed"):
+        if row.get(f) is None:
+            row[f] = False
+
+    # inserted_at: deixa o Supabase usar DEFAULT NOW(); para SQLite, define manualmente
+    if json_as_str:
+        row.setdefault("inserted_at", datetime.now(timezone.utc).isoformat())
+    else:
+        row.pop("inserted_at", None)   # Supabase: deixa o DEFAULT agir
+
     return row
 
 
@@ -182,7 +195,8 @@ class SupabaseBackend:
 
     def upsert_questions(self, questions: List[Dict[str, Any]]) -> Dict[str, int]:
         rows = [_prepare_row(q, json_as_str=False) for q in questions]
-        # Batch upsert via merge-duplicates
+
+        # Tentativa em lote primeiro
         try:
             r = self._http.post(
                 self._url(),
@@ -193,29 +207,41 @@ class SupabaseBackend:
                 content=json.dumps(rows, ensure_ascii=False, default=str),
                 timeout=60,
             )
-            r.raise_for_status()
-            return {"inserted": len(rows), "errors": 0}
+            if r.is_success:
+                return {"inserted": len(rows), "errors": 0}
+            # Supabase retornou erro HTTP — loga o body para diagnóstico
+            log.error(
+                "Supabase batch upsert HTTP %d: %s",
+                r.status_code, r.text[:500],
+            )
         except Exception as e:
-            log.error("Erro no upsert Supabase: %s", e)
-            # Tenta uma a uma para identificar o problema
-            ok = err = 0
-            for row in rows:
-                try:
-                    r = self._http.post(
-                        self._url(),
-                        headers={
-                            **self._hdrs,
-                            "Prefer": "resolution=merge-duplicates,return=minimal",
-                        },
-                        content=json.dumps([row], ensure_ascii=False, default=str),
-                        timeout=30,
-                    )
-                    r.raise_for_status()
+            log.error("Supabase batch upsert exception: %s", e)
+
+        # Fallback: um a um para identificar qual questão falha
+        ok = err = 0
+        for row in rows:
+            try:
+                r = self._http.post(
+                    self._url(),
+                    headers={
+                        **self._hdrs,
+                        "Prefer": "resolution=merge-duplicates,return=minimal",
+                    },
+                    content=json.dumps([row], ensure_ascii=False, default=str),
+                    timeout=30,
+                )
+                if r.is_success:
                     ok += 1
-                except Exception as e2:
-                    log.error("Q%s — %s", row.get("q_number"), e2)
+                else:
+                    log.error(
+                        "Supabase Q%s HTTP %d: %s",
+                        row.get("q_number"), r.status_code, r.text[:300],
+                    )
                     err += 1
-            return {"inserted": ok, "errors": err}
+            except Exception as e2:
+                log.error("Supabase Q%s exception: %s", row.get("q_number"), e2)
+                err += 1
+        return {"inserted": ok, "errors": err}
 
     def fetch_recent(self, limit: int = 10) -> List[Dict[str, Any]]:
         try:

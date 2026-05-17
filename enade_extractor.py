@@ -701,20 +701,29 @@ def group_questions_for_output(
     questions: List[Question],
     subareas: List[str],
 ) -> Dict[str, Any]:
+    # Garante que "Não classificada" sempre existe como bucket no CE,
+    # para receber questões do Componente Específico sem subárea definida.
+    ce_keys = list(subareas)
+    if "Não classificada" not in ce_keys:
+        ce_keys.append("Não classificada")
+
     output: Dict[str, Any] = {
         "formacao_geral": [],
-        "componente_especifico": {sub: [] for sub in subareas},
-        "nao_classificadas": [],
+        "componente_especifico": {sub: [] for sub in ce_keys},
+        "nao_classificadas": [],   # reservado para section_type desconhecido
     }
     for q in questions:
         q_dict = asdict(q)
         if q.section_type == "Formação Geral":
             output["formacao_geral"].append(q_dict)
         elif q.section_type == "Componente Específico":
-            if q.subarea and q.subarea in output["componente_especifico"]:
-                output["componente_especifico"][q.subarea].append(q_dict)
-            else:
-                output["nao_classificadas"].append(q_dict)
+            # Se subárea válida → bucket correto; caso contrário → "Não classificada"
+            bucket = q.subarea if (q.subarea and q.subarea in output["componente_especifico"]) \
+                     else "Não classificada"
+            output["componente_especifico"][bucket].append(q_dict)
+        else:
+            # section_type desconhecido ou None
+            output["nao_classificadas"].append(q_dict)
     return output
 
 
